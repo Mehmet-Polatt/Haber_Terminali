@@ -20,7 +20,10 @@ from schemas import (
 from scrapers.runner import fetch_all_tech_news
 from scrapers.politics_scrapers import fetch_all_politics_news
 from scrapers.football_scrapers import fetch_all_football_news
-from pipeline import run_pipeline, run_politics_pipeline, run_football_pipeline, normalize_turkish
+from pipeline import (
+    run_pipeline, run_politics_pipeline, run_football_pipeline,
+    run_retention_cleanup, normalize_turkish
+)
 import gemini_service
 
 
@@ -33,7 +36,7 @@ async def run_tech_pipeline_bg():
     async with AsyncSessionLocal() as session:
         try:
             print("[Background Task] 🚀 Teknoloji pipeline'ı anlık olarak çalıştırılıyor...")
-            await run_pipeline(db=session, limit_per_source=5)
+            await run_pipeline(db=session)  # limit yok — sınırsız haber
         except Exception as e:
             print(f"[Background Task Hata - Teknoloji]: {e}")
             logger.error(f"Background tech pipeline error: {e}")
@@ -43,7 +46,7 @@ async def run_politics_pipeline_bg():
     async with AsyncSessionLocal() as session:
         try:
             print("[Background Task] 🚀 Siyaset/TBMM pipeline'ı anlık olarak çalıştırılıyor...")
-            await run_politics_pipeline(db=session, limit_per_source=5)
+            await run_politics_pipeline(db=session)  # limit yok — sınırsız haber
         except Exception as e:
             print(f"[Background Task Hata - Siyaset]: {e}")
             logger.error(f"Background politics pipeline error: {e}")
@@ -53,19 +56,31 @@ async def run_football_pipeline_bg():
     async with AsyncSessionLocal() as session:
         try:
             print("[Background Task] 🚀 Futbol pipeline'ı anlık olarak çalıştırılıyor...")
-            await run_football_pipeline(db=session, limit_per_source=5)
+            await run_football_pipeline(db=session)  # limit yok — sınırsız haber
         except Exception as e:
             print(f"[Background Task Hata - Futbol]: {e}")
             logger.error(f"Background football pipeline error: {e}")
+
+
+async def run_retention_cleanup_bg():
+    """7 günden eski haberleri siler. APScheduler tarafından her gün 03:00 UTC'de çalıştırılır."""
+    async with AsyncSessionLocal() as session:
+        try:
+            print("[Retention Scheduler] ♻️  Günlük veritabanı temizliği başlatıldı...")
+            result = await run_retention_cleanup(db=session)
+            print(f"[Retention Scheduler] ✅ Temizlik tamamlandı: {result}")
+        except Exception as e:
+            print(f"[Retention Scheduler Hata]: {e}")
+            logger.error(f"Retention cleanup error: {e}")
 
 
 async def run_all_pipelines_bg():
     print("\n[Scheduler] ⏰ Saatlik (every 1 hour) tüm haber boru hatları (Teknoloji, Siyaset, Futbol, TBMM) başlatılıyor...")
     async with AsyncSessionLocal() as session:
         try:
-            await run_pipeline(db=session, limit_per_source=5)
-            await run_politics_pipeline(db=session, limit_per_source=5)
-            await run_football_pipeline(db=session, limit_per_source=5)
+            await run_pipeline(db=session)           # limit yok — sınırsız haber
+            await run_politics_pipeline(db=session)  # limit yok — sınırsız haber
+            await run_football_pipeline(db=session)  # limit yok — sınırsız haber
             print("[Scheduler] ✅ Saatlik tüm haber boru hatları başarıyla tamamlandı.")
         except Exception as e:
             print(f"[Scheduler Hata]: {e}")
@@ -80,11 +95,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[Warning] Could not initialize DB on startup: {e}")
 
-    # Start Hourly Scheduler (Every 1 hour)
+    # Saatlik haber toplama scheduler'ı
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(run_all_pipelines_bg, 'interval', hours=1)
+    scheduler.add_job(run_all_pipelines_bg, 'interval', hours=1, id='hourly_news')
+
+    # Günlük 7-günlük retention temizliği (her gün 03:00 UTC)
+    scheduler.add_job(
+        run_retention_cleanup_bg,
+        'cron',
+        hour=3,
+        minute=0,
+        id='daily_retention_cleanup'
+    )
+
     scheduler.start()
-    print("[Scheduler] ⏰ Saatlik (hourly / every 1 hour) zamanlayıcı başarıyla başlatıldı.")
+    print("[Scheduler] ⏰ Saatlik haber + günlük retention (03:00 UTC) zamanlayıcıları başarıyla başlatıldı.")
 
     yield
 
@@ -136,9 +161,31 @@ async def root():
 
 @app.post("/api/refresh", tags=["Pipeline"])
 async def refresh_all_news():
-    """Fetch fresh news across all categories when the mobile app is opened."""
-    await run_all_pipelines_bg()
-    return {"status": "completed", "message": "Tüm haber kaynakları yenilendi."}
+    """
+    Haber yenileme durumunu bildirir.
+    Veri çekme işlemi saatlik scheduler tarafından otomatik yapılmaktadır;
+    bu endpoint manuel tetikleme gerektiğinde /api/scrape* endpoint'lerini kullanın.
+    """
+    return {
+        "status": "ok",
+        "message": "Haberler saatlik olarak otomatik güncellenmektedir. Manuel çekim için /api/scrape kullanın."
+    }
+
+
+
+@app.post("/api/cleanup", tags=["Pipeline"])
+async def trigger_retention_cleanup(db: AsyncSession = Depends(get_db)):
+    """
+    Manuel olarak 7 günden eski haberleri siler.
+    Normalde her gece 03:00 UTC'de otomatik çalışır;
+    bu endpoint isteğe bağlı manuel tetikleme içindir.
+    """
+    result = await run_retention_cleanup(db=db)
+    return {
+        "status": "completed",
+        "message": f"Retention temizliği tamamlandı. Toplam {result['total_deleted']} eski kayıt silindi.",
+        "details": result
+    }
 
 
 @app.get("/api/cards", response_model=List[TechCardResponse], tags=["TechCards"])
@@ -283,13 +330,13 @@ async def preview_scrapers(limit_per_source: int = 5) -> Dict[str, List[Dict[str
 
 @app.post("/api/scrape", tags=["Pipeline"])
 async def trigger_pipeline(
-    limit_per_source: int = 5,
     db: AsyncSession = Depends(get_db)
 ):
     """
     Triggers raw news collection pipeline (Scrapes -> Deduplicates -> Saves raw TechCards with is_analyzed=False).
+    Haber sayısında limit yoktur; tüm güncel haberler çekilir.
     """
-    result = await run_pipeline(db=db, limit_per_source=limit_per_source)
+    result = await run_pipeline(db=db)  # sınırsız
     return result
 
 
@@ -452,13 +499,13 @@ async def preview_politics_scrapers(limit_per_source: int = 5) -> Dict[str, List
 
 @app.post("/api/scrape-politics", tags=["Pipeline"])
 async def trigger_politics_pipeline(
-    limit_per_source: int = 5,
     db: AsyncSession = Depends(get_db)
 ):
     """
     Triggers raw politics news collection pipeline.
+    Haber sayısında limit yoktur; tüm güncel haberler çekilir.
     """
-    result = await run_politics_pipeline(db=db, limit_per_source=limit_per_source)
+    result = await run_politics_pipeline(db=db)  # sınırsız
     return result
 
 
@@ -599,13 +646,13 @@ async def preview_football_scrapers(limit_per_source: int = 5) -> Dict[str, List
 
 @app.post("/api/scrape-football", tags=["Pipeline"])
 async def trigger_football_pipeline(
-    limit_per_source: int = 5,
     db: AsyncSession = Depends(get_db)
 ):
     """
     Triggers raw football news collection pipeline.
+    Haber sayısında limit yoktur; tüm güncel haberler çekilir.
     """
-    result = await run_football_pipeline(db=db, limit_per_source=limit_per_source)
+    result = await run_football_pipeline(db=db)  # sınırsız
     return result
 
 

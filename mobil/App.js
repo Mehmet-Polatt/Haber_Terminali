@@ -12,6 +12,8 @@ import {
   TouchableOpacity,
   ScrollView,
 } from 'react-native';
+
+const PAGE_SIZE = 20; // Sayfa başına haber sayısı
 import { Feather } from '@expo/vector-icons';
 import client from './src/api/client';
 import Card from './src/components/Card';
@@ -36,43 +38,79 @@ export default function App() {
   const [cards, setCards] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [errorMsg, setErrorMsg] = useState(null);
-  const hasRefreshedOnOpen = useRef(false);
+  const skipRef = useRef(0); // Mevcut sayfa offset'i
+  const isFetchingRef = useRef(false); // Paralel istek kilidi
 
+  const getEndpoint = (category) => {
+    if (category === 'politics') return '/api/politics/cards';
+    if (category === 'football') return '/api/football/cards';
+    if (category === 'tbmm') return '/api/tbmm/cards';
+    return '/api/cards';
+  };
+
+  // İlk yükleme veya pull-to-refresh: listeyi sıfırlar
   const fetchCards = useCallback(async (category = activeCategory, isRefresh = false) => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
+
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
     setErrorMsg(null);
 
-    let endpoint = '/api/cards';
-    if (category === 'politics') endpoint = '/api/politics/cards';
-    else if (category === 'football') endpoint = '/api/football/cards';
-    else if (category === 'tbmm') endpoint = '/api/tbmm/cards';
-
     try {
-      const response = await client.get(endpoint, {
-        params: { limit: 20, skip: 0 },
+      const response = await client.get(getEndpoint(category), {
+        params: { limit: PAGE_SIZE, skip: 0 },
       });
-      setCards(response.data);
+      const data = response.data;
+      setCards(data);
+      skipRef.current = data.length;
+      setHasMore(data.length === PAGE_SIZE);
     } catch (error) {
       console.error('Failed to fetch cards:', error);
       setErrorMsg('Haberler yüklenemedi. Lütfen tekrar deneyin.');
     } finally {
       setLoading(false);
       setRefreshing(false);
+      isFetchingRef.current = false;
     }
   }, [activeCategory]);
 
-  useEffect(() => {
-    if (!hasRefreshedOnOpen.current) {
-      hasRefreshedOnOpen.current = true;
-      client.post('/api/refresh')
-        .catch((error) => console.error('Failed to refresh news on app open:', error))
-        .finally(() => fetchCards(activeCategory));
-      return;
+  // Sonsuz scroll: liste sonuna gelindiğinde sonraki sayfayı yükle
+  const fetchMoreCards = useCallback(async () => {
+    if (isFetchingRef.current || !hasMore || loadingMore) return;
+    isFetchingRef.current = true;
+    setLoadingMore(true);
+
+    try {
+      const response = await client.get(getEndpoint(activeCategory), {
+        params: { limit: PAGE_SIZE, skip: skipRef.current },
+      });
+      const newData = response.data;
+      if (newData.length === 0) {
+        setHasMore(false);
+      } else {
+        setCards(prev => [...prev, ...newData]);
+        skipRef.current += newData.length;
+        setHasMore(newData.length === PAGE_SIZE);
+      }
+    } catch (error) {
+      console.error('Failed to load more cards:', error);
+    } finally {
+      setLoadingMore(false);
+      isFetchingRef.current = false;
     }
+  }, [activeCategory, hasMore, loadingMore]);
+
+  // Kategori değişince listeyi ve sayfalama state'ini sıfırla
+  useEffect(() => {
+    skipRef.current = 0;
+    setHasMore(true);
+    setCards([]);
     fetchCards(activeCategory);
-  }, [activeCategory, fetchCards]);
+  }, [activeCategory]);
 
   const handleCategoryPress = (categoryId) => {
     if (categoryId !== activeCategory) {
@@ -144,6 +182,14 @@ export default function App() {
           )}
           contentContainerStyle={styles.listContent}
           ListEmptyComponent={renderEmptyComponent}
+          ListFooterComponent={
+            loadingMore ? (
+              <View style={styles.footerLoader}>
+                <ActivityIndicator size="small" color={THEME.gray} />
+                <Text style={styles.footerText}>Daha fazla yükleniyor...</Text>
+              </View>
+            ) : null
+          }
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -152,6 +198,8 @@ export default function App() {
               colors={[THEME.text]}
             />
           }
+          onEndReached={fetchMoreCards}
+          onEndReachedThreshold={0.3}
           showsVerticalScrollIndicator={false}
         />
       )}
@@ -210,6 +258,17 @@ const styles = StyleSheet.create({
     padding: 24,
     paddingTop: 10,
     paddingBottom: 32,
+  },
+  footerLoader: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 16,
+    gap: 8,
+  },
+  footerText: {
+    fontSize: 13,
+    color: THEME.gray,
   },
   loaderContainer: {
     flex: 1,
