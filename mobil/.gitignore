@@ -1,0 +1,38 @@
+# ==============================================================================
+# Haber Terminali Mobil - Expo / React Native .gitignore
+# ==============================================================================
+
+node_modules/
+.expo/
+.expo-shared/
+web-build/
+dist/
+
+# Environment files
+.env
+.env.*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+!.env.example
+
+# Native builds
+*.orig.*
+[aA]ndroid/
+[iI]os/
+
+# Metro & Bundles
+.metro-health-check*
+*.jsbundle
+
+# Debug logs
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+pnpm-debug.*
+
+# Operating System & IDE
+.DS_Store
+.idea/
+.vscode/

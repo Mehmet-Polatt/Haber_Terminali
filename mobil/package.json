@@ -1,0 +1,29 @@
+{
+  "name": "haber-terminali-mobil",
+  "version": "1.0.0",
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.0.2",
+    "@react-navigation/bottom-tabs": "^7.20.0",
+    "@react-navigation/drawer": "^7.14.2",
+    "@react-navigation/native": "^7.4.1",
+    "axios": "^1.7.2",
+    "expo": "^57.0.25",
+    "expo-clipboard": "^57.0.2",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-gesture-handler": "~2.32.0",
+    "react-native-reanimated": "4.5.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0"
+  },
+  "private": true
+}
