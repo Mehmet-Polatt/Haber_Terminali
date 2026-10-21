@@ -1,0 +1,45 @@
+services:
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set in .env}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-haber_terminali}
+    ports:
+      - "3306:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$${MYSQL_ROOT_PASSWORD}\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - haber_network
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # The host-side DATABASE_URL in .env commonly points to localhost.
+      # Inside Compose, the database is reachable by its service name: db.
+      DATABASE_URL: mysql+aiomysql://root:${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set in .env}@db:3306/${MYSQL_DATABASE:-haber_terminali}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - haber_network
+
+volumes:
+  db_data:
+
+networks:
+  haber_network:
+    driver: bridge

@@ -12,7 +12,8 @@
       "backgroundColor": "#0F172A"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.mehmet-polat.haber-terminali-mobil"
     },
     "android": {
       "adaptiveIcon": {
